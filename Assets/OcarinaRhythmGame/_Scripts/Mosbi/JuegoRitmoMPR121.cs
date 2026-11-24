@@ -369,7 +369,7 @@ La multiplicación solo sirve para convertir de la escala de Unity a la de Paint
         // Agrega el objeto y su carril a la lista de notas que siguen en juego.
         notasActivas.Add(new NotaEnEscena(objetoNota, carrilElegido));
 
-        Debug.Log("Apareció una nota en el carril " + carrilElegido);
+        //Debug.Log("Apareció una nota en el carril " + carrilElegido);
     }
 
     /*
@@ -402,7 +402,7 @@ La multiplicación solo sirve para convertir de la escala de Unity a la de Paint
             // el jugador dejó pasar esa nota.
             if (yNota < posicionLineaAciertoY - margenExcelente)
             {
-                Debug.LogError("ERROR: Se perdió la nota del carril " + nota.carril);
+                //Debug.LogError("ERROR: Se perdió la nota del carril " + nota.carril);
 
                 // Destroy() programa la eliminación del GameObject al final
                 // del frame actual.
