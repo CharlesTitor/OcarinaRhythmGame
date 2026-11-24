@@ -1,124 +1,118 @@
 using System.Collections.Generic;
 using UnityEngine;
 
-/*
- JuegoRitmoMPR121
-
- Genera una pista sencilla estilo Guitar Hero:
-
-   1. Dibuja carriles verticales.
-   2. Coloca una zona horizontal de acierto.
-   3. Genera notas cuadradas que bajan por carriles aleatorios.
-   4. Consulta las pulsaciones recibidas por MPR121SerialBridge.
-   5. Imprime EXCELENTE o ERROR en la Console.
-
- No necesita sprites descargados ni prefabs.
- El script crea un sprite cuadrado blanco en memoria y cambia su color
- para formar carriles, marcadores y notas.
-*/
+/// <summary>
+/// Controla la pista visual, el movimiento de las notas y su calificación.
+/// MPR121SerialBridge recibe los datos que Arduino envía por el puerto serial.
+/// Este script consulta ese componente para detectar nuevas pulsaciones.
+/// </summary>
 public class JuegoRitmoMPR121 : MonoBehaviour
 {
-
-    // CONFIGURACIÓN DEL JUEGO
-
-    [Header("Movimiento de las notas")]
-
-    [Tooltip("Velocidad vertical a la que bajan las notas, en unidades por segundo.")]
-    [Min(0.1f)]
-    public float velocidadNotas = 4f;
-
-    [Tooltip("Segundos entre la creación de una nota y la siguiente.")]
-    [Min(0.2f)]
-    public float segundosEntreNotas = 1.2f;
-
-    [Header("Zona de acierto")]
-
-    [Tooltip("Distancia máxima entre el centro de una nota y la línea de acierto " +
-        "para considerar que el toque fue EXCELENTE.")]
-    [Min(0.05f)]
-    public float margenExcelente = 0.35f;
-
-    // REFERENCIAS A OTROS COMPONENTES Y OBJETOS   
-
-    // Este componente recibe los eventos T,carril y R,carril del Arduino.
+    // Componente que lee los mensajes enviados por Arduino.
+    // Debe estar en el mismo GameObject que este script.
     private MPR121SerialBridge puenteSerial;
 
-    // La cámara principal permite calcular los bordes visibles y colocar
-    // carriles y notas dentro de la pantalla.
+    // Cámara marcada con la etiqueta MainCamera.
+    // Se utiliza para calcular el tamaño visible de la escena.
     private Camera camaraPrincipal;
 
-    // Sprite cuadrado blanco creado en memoria; se reutiliza para todos
-    // los elementos visuales del juego.
+    // Textura de un píxel que se usa como base para dibujar cuadrados.
+    private Texture2D texturaCuadrado;
+
+    // Sprite cuadrado creado a partir de la textura anterior.
+    // Se reutiliza para las notas, carriles y líneas.
     private Sprite spriteCuadrado;
 
-    // Textura de 1 x 1 píxel usada para crear spriteCuadrado.
-    private Texture2D texturaCuadrada;
-
-
-
-    // DATOS DE LA PISTA
-
-
-    // Guarda los objetos de nota que están actualmente en la escena.
+    // Lista de las notas que existen actualmente en la escena.
     private readonly List<NotaEnEscena> notasActivas =
         new List<NotaEnEscena>();
 
-    // Posición horizontal, en unidades del mundo de Unity, para cada carril.
-    private float[] posicionesCarrilesX;
+    // Coordenada horizontal central de cada carril.
+    private float[] posicionesXCarriles;
 
-    // Número de carriles tomado del componente MPR121SerialBridge.
+    // Cantidad de carriles que este juego usará.
+    // Se copia desde el campo cantidadCarriles del puente serial.
     private int cantidadCarriles;
 
-    // Coordenada vertical de la línea donde se deben tocar las notas.
+    // Coordenada Y de la línea que se debe alcanzar al tocar.
     private float posicionLineaAciertoY;
 
-    // Coordenada vertical donde aparecen las notas nuevas.
+    // Coordenada Y donde aparece cada nota nueva.
     private float posicionInicioNotasY;
 
-    // Momento del reloj de Unity en que debe aparecer la siguiente nota.
+    // Tiempo de Unity en que debe aparecer la siguiente nota.
     private float tiempoSiguienteNota;
 
-    // Se usa para evitar que dos notas seguidas aparezcan en el mismo carril
-    // cuando el juego tiene más de un carril.
-    private int carrilNotaAnterior = -1;
+    // Evita repetir dos veces seguidas el mismo carril al generar notas,
+    // siempre que haya más de un carril.
+    private int ultimoCarrilGenerado = -1;
 
+    // Permanece falso si Start encuentra un componente o una configuración faltante.
+    private bool juegoPreparado = false;
 
-    // Colores de referencia para los carriles.
-    // Si hay más carriles que colores, los colores vuelven a empezar.
+    // sortingOrder controla qué elementos se dibujan delante de otros.
+    private const int ORDEN_FONDO = 0;
+    private const int ORDEN_NOTAS = 2;
+    private const int ORDEN_LINEA_ACIERTO = 3;
+
+    [Header("Movimiento y aparición de notas")]
+
+    [Tooltip("Velocidad vertical de las notas en unidades del mundo por segundo.")]
+    [Min(0.1f)]
+    public float velocidadNotas = 4f;
+
+    [Tooltip("Segundos que deben pasar entre la aparición de una nota y la siguiente.")]
+    [Min(0.1f)]
+    public float segundosEntreNotas = 1.2f;
+
+    [Header("Ventana para acertar")]
+
+    [Tooltip(
+        "Distancia vertical máxima entre el centro de la nota y la línea de acierto. " +
+        "Se mide en unidades del mundo de Unity.")]
+    [Min(0.05f)]
+    public float ventanaMaximaAcierto = 0.60f;
+
+    [Header("Porcentajes de calificación")]
+
+    [Tooltip("Porcentaje mínimo para Perfecto. El 100% corresponde al centro de la línea.")]
+    [Range(0, 100)]
+    public int porcentajePerfecto = 95;
+
+    [Tooltip("Porcentaje mínimo para Great, si no se alcanzó Perfecto.")]
+    [Range(0, 100)]
+    public int porcentajeGreat = 85;
+
+    [Tooltip("Porcentaje mínimo para Good, si no se alcanzó Great.")]
+    [Range(0, 100)]
+    public int porcentajeGood = 70;
+
+    [Header("Colores de carril")]
+
+    // Los índices del arreglo coinciden con los carriles:
+    // 0 = rojo, 1 = verde, 2 = amarillo, 3 = azul.
+    // Cada componente de Color va de 0 a 1. Por ejemplo,
+    // 0.95 equivale aproximadamente a 242 en la escala de 0 a 255.
     private readonly Color[] coloresCarril =
- {
-    new Color(0.95f, 0.15f, 0.15f), // Carril 0: rojo.
-    new Color(0.15f, 0.75f, 0.25f), // Carril 1: verde.
-    new Color(0.95f, 0.80f, 0.10f),  // Carril 2: amarillo.
-    new Color(0.15f, 0.45f, 0.95f)  // Carril 3: azul
-};
+    {
+        new Color(0.95f, 0.15f, 0.15f), // Carril 0: rojo
+        new Color(0.15f, 0.75f, 0.25f), // Carril 1: verde
+        new Color(0.95f, 0.80f, 0.10f), // Carril 2: amarillo
+        new Color(0.15f, 0.45f, 0.95f)  // Carril 3: azul
+    };
 
-
-    /*
-      Se hace porque ambos programas expresan la intensidad de los colores con escalas distintas:
-- Unity usa decimales entre 0 y 1. Por ejemplo, 0.15 representa el 15 % de la intensidad máxima
-    del rojo. de paint a unity se divide el valor / 255
-- Paint usa enteros entre 0 y 255. El 255 es la intensidad máxima de un canal de color; hay
-    256 valores posibles contando desde 0.
-La multiplicación solo sirve para convertir de la escala de Unity a la de Paint. 
-    Si tienes un color RGB de Paint y quieres escribirlo en Unity, divides cada canal entre 255.
-     
-    */
-    /*
-     // CLASE INTERNA: NotaEnEscena
-      Guarda los datos de una nota individual:
-        - objeto: el cuadrado que se ve en pantalla.
-        - carril: el carril al que pertenece.
-
-     Esta clase no es un MonoBehaviour; solo organiza información dentro
-     de JuegoRitmoMPR121.
-    */
-
+    /// <summary>
+    /// Registro de una nota activa: el GameObject que se dibuja
+    /// y el número de carril al que pertenece.
+    /// </summary>
     private class NotaEnEscena
     {
         public GameObject objeto;
         public int carril;
 
+        /// <summary>
+        /// Constructor: asigna los valores recibidos a los campos del registro.
+        /// </summary>
         public NotaEnEscena(GameObject objetoNota, int numeroCarril)
         {
             objeto = objetoNota;
@@ -126,116 +120,127 @@ La multiplicación solo sirve para convertir de la escala de Unity a la de Paint
         }
     }
 
-
-
-    // Unity llama a Start() una vez al iniciar el componente.
-    // Aquí se buscan los componentes necesarios y se construye la pista visual.
-
+    /// <summary>
+    /// Start se ejecuta una sola vez al iniciar este objeto.
+    /// Busca componentes, valida la cantidad de carriles y crea la pista.
+    /// </summary>
     private void Start()
     {
-        /*
-        GetComponent<T>() busca en este mismo objeto de la Jerarquía un
-         componente del tipo indicado.
-        
-         Por eso MPR121SerialBridge y JuegoRitmoMPR121 deben estar agregados
-         al mismo objeto ControladorSerial.
-        */
+        Debug.Log(" Entramos al START");
+        // GetComponent<T>() busca un componente del tipo T en este mismo GameObject.
         puenteSerial = GetComponent<MPR121SerialBridge>();
 
-
-        if (puenteSerial == null)
-        {
-            Debug.LogError("No se encontró MPR121SerialBridge en este objeto. " +
-                "Agrega ambos scripts a ControladorSerial.");
-
-            // enabled = false desactiva este componente.
-            // Así Update() y LateUpdate() no intentarán usar una referencia
-            // que no existe.
-            enabled = false;
-            return;
-        }
-
-        // Camera.main busca la cámara marcada con la etiqueta MainCamera.
+        // Camera.main busca la cámara que tenga la etiqueta MainCamera.
         camaraPrincipal = Camera.main;
 
+        // Sin el puente no se pueden recibir las pulsaciones de Arduino.
+        if (puenteSerial == null)
+        {
+            Debug.LogError(
+                "Falta MPR121SerialBridge. Agrégalo al mismo GameObject " +
+                "que contiene JuegoRitmoMPR121."
+            );
+            return; // Termina Start porque no se puede configurar el juego.
+        }
+
+        // Sin cámara principal no se puede calcular el espacio visible.
         if (camaraPrincipal == null)
         {
-            Debug.LogError("No se encontró una cámara con la etiqueta MainCamera.");
-            enabled = false;
+            Debug.LogError(
+                "No se encontró una cámara con la etiqueta MainCamera."
+            );
             return;
         }
 
-        // Toma la cantidad configurada en el Inspector del puente serial.
-        // Debe coincidir con la cantidad de botones que envía Arduino.
+        // Para este juego 2D se recomienda Projection = Orthographic.
+        if (!camaraPrincipal.orthographic)
+        {
+            Debug.LogWarning(
+                "Configura la cámara con Projection = Orthographic para este juego 2D."
+            );
+        }
+
+        // Lee del puente serial la cantidad de sensores/carriles seleccionada.
+        // Para cuatro sensores, cantidadCarriles debe valer 4 en ese componente.
         cantidadCarriles = puenteSerial.cantidadCarriles;
 
-        if (cantidadCarriles < 1 || cantidadCarriles > 12)
+        // Hay cuatro colores definidos, por lo que se permiten de 1 a 4 carriles.
+        if (cantidadCarriles < 1 || cantidadCarriles > coloresCarril.Length)
         {
-            Debug.LogError("Cantidad Carriles debe estar entre 1 y 12.");
-            enabled = false;
+            Debug.LogError(
+                "cantidadCarriles debe estar entre 1 y " +
+                coloresCarril.Length +
+                ". Configúralo en MPR121SerialBridge."
+            );
             return;
         }
 
-        // Crea un cuadrado blanco reutilizable para los elementos visuales.
-        CrearSpriteCuadrado();
+        // Mathf.Max(a, b) devuelve el mayor de los dos valores.
+        // El mínimo de 0.05 evita una ventana igual a cero o negativa;
+        // más adelante la distancia se divide entre esta ventana.
+        ventanaMaximaAcierto = Mathf.Max(0.05f, ventanaMaximaAcierto);
 
-        // Calcula las posiciones y dibuja la pista y la línea de acierto.
+        CrearSpriteCuadrado();
         CrearPista();
 
-        // La primera nota aparecerá un poco después de iniciar el juego.
+        // Time.time son los segundos transcurridos desde que inició la escena.
+        // Se espera 1.5 segundos para que el jugador se prepare.
         tiempoSiguienteNota = Time.time + 1.5f;
 
-        Debug.Log("Pista creada con " + cantidadCarriles +
-            " carriles. Esperando conexión con Arduino...");
+        // Update y LateUpdate solo ejecutarán su lógica después de esta preparación.
+        juegoPreparado = true;
+
+        Debug.Log(
+            "Juego preparado con " + cantidadCarriles +
+            " carriles. Esperando la conexión de Arduino."
+        );
     }
 
-
-    // Esta función mueve las notas, retira las que ya se fallaron y genera
-    // nuevas notas a intervalos regulares.
-
+    /// <summary>
+    /// Update se ejecuta una vez por frame.
+    /// Mueve notas y crea nuevas mientras el puente esté conectado.
+    /// </summary>
     private void Update()
     {
-        // No inicia el juego de notas hasta que MPR121SerialBridge haya abierto
-        // el puerto serial correctamente.
-        if (puenteSerial == null || !puenteSerial.Conectado)
+        if (!juegoPreparado)
         {
             return;
         }
 
-        // Mueve las notas que ya existen hacia la línea de acierto.
+        // Con la conexión desconectada se pausa el juego para no perder notas.
+        if (!puenteSerial.Conectado)
+        {
+            return;
+        }
+
         MoverNotas();
 
-        // Time.time es el tiempo transcurrido desde que comenzó la escena.
-        // Cuando alcanza el momento programado, crea una nota nueva.
+        // Al cumplirse el tiempo programado, se crea una nota.
         if (Time.time >= tiempoSiguienteNota)
         {
             CrearNota();
 
-            // Programa el momento de aparición de la siguiente nota.
+            // Programa la próxima nota sumando el intervalo al tiempo actual.
             tiempoSiguienteNota = Time.time + segundosEntreNotas;
         }
     }
 
-
-    //LateUpdate()
-    /*
-     Unity ejecuta LateUpdate() después de que todos los Update() terminaron.
-     MPR121SerialBridge procesa los mensajes seriales en Update(), así que aquí
-     consultamos las pulsaciones después de que el puente tuvo oportunidad
-     de procesarlas.
-    */
+    /// <summary>
+    /// LateUpdate se ejecuta después de Update en cada frame.
+    /// Consulta si el puente detectó el inicio de una pulsación.
+    /// </summary>
     private void LateUpdate()
     {
-        if (puenteSerial == null || !puenteSerial.Conectado)
+        if (!juegoPreparado || !puenteSerial.Conectado)
         {
             return;
         }
 
-        // Revisa todos los carriles activos.
+        // Con cuatro carriles, revisa los índices 0, 1, 2 y 3.
         for (int carril = 0; carril < cantidadCarriles; carril++)
         {
-            // FuePresionadoEsteFrame() consulta si llegó un evento T para
-            // ese carril durante el frame actual.
+            // FuePresionadoEsteFrame(carril) devuelve true solo en el frame
+            // en que comienza la pulsación; no repite true por mantener el dedo.
             if (puenteSerial.FuePresionadoEsteFrame(carril))
             {
                 EvaluarPulsacion(carril);
@@ -243,313 +248,392 @@ La multiplicación solo sirve para convertir de la escala de Unity a la de Paint
         }
     }
 
-
-    /*
-        CrearSpriteCuadrado()
-
-        Crea una textura de un píxel y la convierte en un Sprite.
-        No se carga un archivo de imagen externo: el script genera el cuadrado
-        blanco en memoria y luego lo reutiliza con distintos tamaños y colores.
-    */
+    /// <summary>
+    /// Crea una textura blanca de 1 por 1 píxeles y un Sprite cuadrado.
+    /// </summary>
     private void CrearSpriteCuadrado()
     {
-        // Texture2D crea una textura nueva.
-        // Los valores 1, 1 significan que la textura mide un píxel de ancho
-        // por un píxel de alto.
-        texturaCuadrada = new Texture2D(1, 1);
+        // Texture2D(ancho, alto) crea una textura de las dimensiones indicadas.
+        texturaCuadrado = new Texture2D(1, 1);
 
-        // SetPixel asigna el color al píxel situado en (0, 0).
-        texturaCuadrada.SetPixel(0, 0, Color.white);
+        // SetPixel(x, y, color) cambia el píxel en las coordenadas indicadas.
+        // En una textura 1x1, el único píxel está en (0, 0).
+        texturaCuadrado.SetPixel(0, 0, Color.white);
 
-        // Apply aplica los cambios de píxeles para que Unity pueda usar la textura.
-        texturaCuadrada.Apply();
+        // Apply() aplica a la textura los cambios hechos con SetPixel.
+        texturaCuadrado.Apply();
 
-        // Sprite.Create crea un Sprite a partir de la textura.
-        // Rect(0, 0, 1, 1) usa toda la textura.
-        // El pivote (0.5, 0.5) pone el centro del Sprite en su punto medio.
-        // Pixels Per Unit = 1 hace que el cuadrado mida aproximadamente una
-        // unidad del mundo antes de escalarlo.
-        spriteCuadrado = Sprite.Create(texturaCuadrada, new Rect(0, 0, 1, 1),
-            new Vector2(0.5f, 0.5f), 1f);
+        // Sprite.Create convierte la textura en un Sprite.
+        // Rect(0,0,ancho,alto) selecciona toda la textura.
+        // Vector2(0.5,0.5) pone el pivote del Sprite en su centro.
+        spriteCuadrado = Sprite.Create(
+            texturaCuadrado,
+            new Rect(0, 0, texturaCuadrado.width, texturaCuadrado.height),
+            new Vector2(0.5f, 0.5f)
+        );
+
+        spriteCuadrado.name = "SpriteCuadradoGeneradoEnEjecucion";
     }
 
-    /*
-     CrearPista()
-    
-     Calcula el espacio visible de la cámara y crea:
-       - Un carril vertical por cada botón.
-       - Un marcador de color en cada carril.
-       - Una línea horizontal de acierto.
-   */
+    /// <summary>
+    /// Calcula posiciones y dibuja carriles, zonas de acierto y línea horizontal.
+    /// </summary>
     private void CrearPista()
     {
-        // orthographicSize es la mitad de la altura visible de una cámara 2D.
+        // orthographicSize es la mitad de la altura que ve la cámara.
         float mitadAlto = camaraPrincipal.orthographicSize;
 
-        // aspect es la proporción ancho/alto de la ventana del juego.
-        // Multiplicarla por la altura visible calcula la mitad del ancho visible.
+        // aspect es la relación ancho/alto. Multiplicarla por mitadAlto
+        // calcula la mitad del ancho visible.
         float mitadAncho = mitadAlto * camaraPrincipal.aspect;
 
-        // Deja un margen en los lados para que los carriles no queden pegados
-        // al borde de la pantalla.
-        float margenLateral = 0.35f;
+        // La pista usa el 80% del ancho de pantalla, dejando margen a los lados.
+        float anchoTotalPista = mitadAncho * 2f * 0.80f;
 
-        // Calcula el ancho disponible para todos los carriles.
-        float anchoPista = (mitadAncho * 2f) - (margenLateral * 2f);
+        // Reparte el ancho de pista en partes iguales entre los carriles.
+        float anchoCarril = anchoTotalPista / cantidadCarriles;
 
-        // Divide el espacio disponible por la cantidad de carriles.
-        float anchoCarril = anchoPista / cantidadCarriles;
+        // Reserva un espacio para la coordenada X central de cada carril.
+        posicionesXCarriles = new float[cantidadCarriles];
 
-        // Crea un arreglo para guardar la posición X central de cada carril.
-        posicionesCarrilesX = new float[cantidadCarriles];
-
-        // La línea de acierto queda cerca de la parte inferior de la pantalla.
+        // -mitadAlto es el límite inferior visible; +1.1 sube la línea.
         posicionLineaAciertoY = -mitadAlto + 1.1f;
 
-        // Las notas aparecen cerca de la parte superior.
+        // mitadAlto es el límite superior; restar 0.5 coloca la nota dentro.
         posicionInicioNotasY = mitadAlto - 0.5f;
 
         for (int carril = 0; carril < cantidadCarriles; carril++)
         {
-            // Calcula el centro horizontal del carril.
-            posicionesCarrilesX[carril] =
-                -mitadAncho + margenLateral + anchoCarril * (carril + 0.5f);
+            // Obtiene el borde izquierdo y avanza hasta el centro del carril.
+            float xCarril =
+                -anchoTotalPista / 2f +
+                anchoCarril * carril +
+                anchoCarril / 2f;
 
-            Color color = ObtenerColorCarril(carril);
+            posicionesXCarriles[carril] = xCarril;
 
-            // Crea la franja vertical del carril.
-            SpriteRenderer fondo = CrearForma(
+            // Dibuja el fondo vertical del carril con un color oscurecido.
+            CrearForma(
                 "FondoCarril_" + carril,
-                new Vector3(posicionesCarrilesX[carril], 0f, 0f),
+                new Vector3(xCarril, 0f, 0f),
                 new Vector3(anchoCarril * 0.92f, mitadAlto * 2f, 1f),
-                new Color(color.r, color.g, color.b, 0.18f), 0);
+                OscurecerColor(ObtenerColorCarril(carril), 0.28f),
+                ORDEN_FONDO
+            );
 
-            // Un color con alpha 0.18 es semitransparente:
-            // permite distinguir carriles sin tapar las notas.
-            fondo.color = new Color(color.r, color.g, color.b, 0.18f);
-
-            // Crea el marcador fijo donde se espera tocar el botón.
-            CrearForma("MarcadorAcierto_" + carril,
-                new Vector3(posicionesCarrilesX[carril], posicionLineaAciertoY, 0f),
-                new Vector3(anchoCarril * 0.55f, 0.16f, 1f), color, 2);
+            // Dibuja un marcador corto del color del carril en la altura de acierto.
+            CrearForma(
+                "ZonaAciertoCarril_" + carril,
+                new Vector3(xCarril, posicionLineaAciertoY, 0f),
+                new Vector3(anchoCarril * 0.72f, 0.12f, 1f),
+                ObtenerColorCarril(carril),
+                ORDEN_LINEA_ACIERTO
+            );
         }
 
-        // Crea una línea horizontal que cruza toda la pista.
-        // Esta línea es la referencia visual del momento de acierto.
-        CrearForma("LineaDeAcierto", new Vector3(0f, posicionLineaAciertoY, 0f),
-            new Vector3(anchoPista, 0.06f, 1f), Color.white, 1);
+        // Dibuja una línea blanca horizontal que indica la altura exacta de acierto.
+        CrearForma(
+            "LineaHorizontalDeAcierto",
+            new Vector3(0f, posicionLineaAciertoY, 0f),
+            new Vector3(anchoTotalPista, 0.035f, 1f),
+            Color.white,
+            ORDEN_LINEA_ACIERTO + 1
+        );
     }
 
-
-    /*
-        CrearNota()
-
-        Elige un carril aleatorio y crea una nota cuadrada en la parte superior.
-        La nota se agrega a notasActivas para que MoverNotas() pueda desplazarla.
-      */
+    /// <summary>
+    /// Crea una nota nueva en un carril aleatorio y guarda su registro.
+    /// </summary>
     private void CrearNota()
     {
+        // Random.Range(enteroMin, enteroMax) incluye el mínimo y excluye el máximo.
+        // Con cantidadCarriles = 4, devuelve 0, 1, 2 o 3.
         int carrilElegido = Random.Range(0, cantidadCarriles);
 
-        // Si hay más de un carril, evita repetir el carril inmediatamente.
-        // Random.Range(int, int) incluye el primer valor y excluye el segundo.
-        if (cantidadCarriles > 1 && carrilElegido == carrilNotaAnterior)
+        // Si repite el carril anterior y hay varios carriles, avanza uno.
+        // El operador % devuelve el residuo y permite volver al carril 0
+        // después del último carril.
+        if (cantidadCarriles > 1 &&
+            carrilElegido == ultimoCarrilGenerado)
         {
             carrilElegido = (carrilElegido + 1) % cantidadCarriles;
         }
 
-        carrilNotaAnterior = carrilElegido;
+        ultimoCarrilGenerado = carrilElegido;
 
-        Color color = ObtenerColorCarril(carrilElegido);
+        // La nota aparece en el centro horizontal de su carril y arriba de la pantalla.
+        Vector3 posicionNota = new Vector3(
+            posicionesXCarriles[carrilElegido],
+            posicionInicioNotasY,
+            0f
+        );
 
-        GameObject objetoNota = CrearForma("Nota_Carril_" + carrilElegido,
-            new Vector3(posicionesCarrilesX[carrilElegido], posicionInicioNotasY, 0f),
-            new Vector3(0.55f, 0.38f, 1f), color, 3).gameObject;
+        GameObject objetoNota = CrearForma(
+            "Nota_Carril_" + carrilElegido,
+            posicionNota,
+            new Vector3(0.55f, 0.38f, 1f),
+            ObtenerColorCarril(carrilElegido),
+            ORDEN_NOTAS
+        );
 
-        // Agrega el objeto y su carril a la lista de notas que siguen en juego.
+        // Conserva el objeto y su carril para moverlo y evaluar la pulsación.
         notasActivas.Add(new NotaEnEscena(objetoNota, carrilElegido));
-
-        //Debug.Log("Apareció una nota en el carril " + carrilElegido);
     }
 
-    /*
-     MoverNotas()
-    
-     Desplaza cada nota hacia abajo.
-    Si una nota pasa la zona de acierto sin ser tocada, registra un ERROR
-     y elimina su objeto de la escena.
-  */
+    /// <summary>
+    /// Mueve las notas hacia abajo y registra MISS si alguna pasa la ventana.
+    /// </summary>
     private void MoverNotas()
     {
-        // Se recorre la lista desde el final hacia el inicio porque se pueden
-        // quitar elementos mientras se recorre.
-        for (int indice = notasActivas.Count - 1; indice >= 0; indice--)
+        // Se recorre la lista hacia atrás porque dentro del ciclo se pueden borrar notas.
+        for (int i = notasActivas.Count - 1; i >= 0; i--)
         {
-            NotaEnEscena nota = notasActivas[indice];
+            NotaEnEscena nota = notasActivas[i];
 
-            // Translate cambia la posición del objeto en la dirección indicada.
-            //
-            // Vector3.down significa (0, -1, 0), es decir, hacia abajo.
-            // Time.deltaTime es el tiempo transcurrido desde el frame anterior.
-            // Multiplicarlo hace que la velocidad sea similar aunque cambien
-            // los cuadros por segundo de la computadora.
-            nota.objeto.transform.Translate(
-                Vector3.down * velocidadNotas * Time.deltaTime);
-
-            float yNota = nota.objeto.transform.position.y;
-
-            // Si el centro de la nota bajó más allá del margen de acierto,
-            // el jugador dejó pasar esa nota.
-            if (yNota < posicionLineaAciertoY - margenExcelente)
+            // Si una nota no tiene objeto válido, se elimina su registro y se continúa.
+            if (nota == null || nota.objeto == null)
             {
-                //Debug.LogError("ERROR: Se perdió la nota del carril " + nota.carril);
+                notasActivas.RemoveAt(i);
+                continue;
+            }
 
-                // Destroy() programa la eliminación del GameObject al final
-                // del frame actual.
+            // Vector3.down es la dirección (0,-1,0), hacia abajo.
+            // Time.deltaTime son los segundos transcurridos desde el frame anterior.
+            // Multiplicar velocidad por deltaTime produce movimiento por segundo
+            // y evita que la velocidad dependa de los frames por segundo.
+            Vector3 desplazamiento =
+                Vector3.down * velocidadNotas * Time.deltaTime;
+
+            // Translate suma el desplazamiento a la posición actual de la nota.
+            nota.objeto.transform.Translate(desplazamiento);
+
+            // La diferencia indica la posición de la nota respecto a la línea.
+            float diferenciaY =
+                nota.objeto.transform.position.y - posicionLineaAciertoY;
+
+            // Si ya pasó por debajo de la línea más allá de la ventana,
+            // se registra que no hubo pulsación a tiempo.
+            if (diferenciaY < -ventanaMaximaAcierto)
+            {
+                Debug.LogError(
+                    "MISS: no se presionó el sensor del carril " +
+                    nota.carril + " dentro de la ventana de acierto."
+                );
+
+                // Destroy solicita a Unity eliminar el objeto visual.
                 Destroy(nota.objeto);
 
-                // RemoveAt() quita esta nota de la lista de notas pendientes.
-                notasActivas.RemoveAt(indice);
+                // RemoveAt elimina el registro de la lista usando su índice.
+                notasActivas.RemoveAt(i);
             }
         }
     }
 
-
-    /*
-     EvaluarPulsacion(carril)
-    
-     Busca la nota más cercana en el carril presionado.
-    
-     Si hay una nota dentro del margenExcelente, registra EXCELENTE.
-     Si no hay nota a tiempo en ese carril, registra ERROR.
-    */
+    /// <summary>
+    /// Busca la nota más cercana del carril tocado, calcula precisión
+    /// y muestra Perfecto, Great, Good o Miss en la consola.
+    /// </summary>
     private void EvaluarPulsacion(int carril)
     {
-        NotaEnEscena notaMasCercana = null;
+        // Los índices válidos de un arreglo de cuatro carriles son 0, 1, 2 y 3.
+        if (carril < 0 || carril >= cantidadCarriles)
+        {
+            Debug.LogError("Número de carril fuera del rango: " + carril);
+            return;
+        }
+
+        int indiceNotaMasCercana = -1;
         float distanciaMasCercana = float.MaxValue;
 
-        // Busca entre todas las notas activas una que pertenezca al carril
-        // presionado y esté lo más cerca posible de la línea de acierto.
-        for (int indice = 0; indice < notasActivas.Count; indice++)
+        // Se recorren las notas activas para encontrar la más cercana
+        // que pertenezca al carril que se acaba de tocar.
+        for (int i = notasActivas.Count - 1; i >= 0; i--)
         {
-            NotaEnEscena nota = notasActivas[indice];
+            NotaEnEscena nota = notasActivas[i];
 
+            // Limpia registros cuyo objeto ya no existe.
+            if (nota == null || nota.objeto == null)
+            {
+                notasActivas.RemoveAt(i);
+                continue;
+            }
+
+            // Ignora notas de los otros carriles.
             if (nota.carril != carril)
             {
                 continue;
             }
 
-            // Mathf.Abs() obtiene el valor absoluto: mide la distancia sin
-            // importar si la nota está arriba o abajo de la línea.
-            float distancia = Mathf.Abs(
-                nota.objeto.transform.position.y - posicionLineaAciertoY);
+            // Mathf.Abs(valor) devuelve el valor absoluto.
+            // La resta puede ser negativa si la nota está debajo de la línea;
+            // Abs la convierte en distancia positiva.
+            float distanciaVertical = Mathf.Abs(
+                nota.objeto.transform.position.y - posicionLineaAciertoY
+            );
 
-            if (distancia < distanciaMasCercana)
+            // Si esta nota está más cerca que la anterior encontrada,
+            // conserva su índice y su distancia.
+            if (distanciaVertical < distanciaMasCercana)
             {
-                distanciaMasCercana = distancia;
-                notaMasCercana = nota;
+                distanciaMasCercana = distanciaVertical;
+                indiceNotaMasCercana = i;
             }
         }
 
-
-        // Si se encontró una nota y está suficientemente cerca de la línea,
-        // el toque fue en el momento correcto.
-        if (notaMasCercana != null &&
-            distanciaMasCercana <= margenExcelente)
+        // Si no hay ninguna nota de ese carril, la pulsación no coincide con nota.
+        if (indiceNotaMasCercana == -1)
         {
-            Debug.Log("EXCELENTE: acertaste en el carril " + carril);
+            Debug.LogError(
+                "MISS: se presionó el carril " + carril +
+                ", pero no hay una nota de ese carril."
+            );
+            return;
+        }
 
-            // Destruye la nota acertada.
-            Destroy(notaMasCercana.objeto);
+        // Si está más lejos que la ventana, la pulsación fue demasiado temprana.
+        // La nota se conserva para que aún pueda acertarse después.
+        if (distanciaMasCercana > ventanaMaximaAcierto)
+        {
+            Debug.LogError(
+                "MISS: pulsación fuera de tiempo en el carril " + carril +
+                ". La nota aún no está dentro de la ventana."
+            );
+            return;
+        }
 
-            // Remove() quita de la lista el objeto de nota indicado.
-            notasActivas.Remove(notaMasCercana);
+        // Convierte la distancia a una proporción entre 0 y 1:
+        // distancia 0 produce 1 (100%); distancia igual a la ventana produce 0.
+        float precisionNormalizada =
+            1f - (distanciaMasCercana / ventanaMaximaAcierto);
+
+        // Mathf.Clamp(valor, minimo, maximo) mantiene el valor dentro del rango.
+        // Primer argumento: la proporción calculada arriba.
+        // Segundo argumento: 0, límite inferior.
+        // Tercer argumento: 1, límite superior.
+        // Esto protege el cálculo de valores fuera del rango por redondeos.
+        float precisionLimitada = Mathf.Clamp(
+            precisionNormalizada,
+            0f,
+            1f
+        );
+
+        // Multiplica la proporción por 100 para convertirla a porcentaje.
+        // RoundToInt redondea al entero más cercano; por ejemplo 94.6 pasa a 95.
+        int porcentajePrecision = Mathf.RoundToInt(
+            precisionLimitada * 100f
+        );
+
+        // Primero se comprueba el grado más alto para darle prioridad.
+        if (porcentajePrecision >= porcentajePerfecto)
+        {
+            Debug.Log(
+                "PERFECTO: carril " + carril +
+                " | precisión: " + porcentajePrecision + "%"
+            );
+        }
+        else if (porcentajePrecision >= porcentajeGreat)
+        {
+            Debug.Log(
+                "GREAT: carril " + carril +
+                " | precisión: " + porcentajePrecision + "%"
+            );
+        }
+        else if (porcentajePrecision >= porcentajeGood)
+        {
+            Debug.Log(
+                "GOOD: carril " + carril +
+                " | precisión: " + porcentajePrecision + "%"
+            );
         }
         else
         {
-            // Esto ocurre si se tocó el carril equivocado, demasiado pronto
-            // o demasiado tarde.
+            // La pulsación quedó dentro de la ventana, pero no alcanzó el mínimo Good.
             Debug.LogError(
-                "ERROR: No había una nota en el punto de acierto del carril " + carril);
+                "MISS: carril " + carril +
+                " | precisión insuficiente: " + porcentajePrecision + "%"
+            );
         }
+
+        // Después de calificar, se destruye la nota aunque haya sido Miss.
+        Destroy(notasActivas[indiceNotaMasCercana].objeto);
+
+        // También se elimina su registro para que no se vuelva a calificar.
+        notasActivas.RemoveAt(indiceNotaMasCercana);
     }
 
-
-    // =========================================================================
-    // CrearForma(...)
-    //
-    // Crea un GameObject con SpriteRenderer y le asigna el cuadrado creado
-    // en CrearSpriteCuadrado().
-    //
-    // Se usa para crear fondos de carriles, marcadores, línea y notas.
-    // =========================================================================
-    private SpriteRenderer CrearForma(
+    /// <summary>
+    /// Crea un GameObject cuadrado con posición, escala, color y orden de dibujo.
+    /// </summary>
+    private GameObject CrearForma(
         string nombre,
         Vector3 posicion,
         Vector3 escala,
         Color color,
         int ordenDibujo)
     {
-        // new GameObject crea un objeto nuevo en la escena.
+        // Crea un objeto vacío con el nombre recibido.
         GameObject forma = new GameObject(nombre);
 
-        // AddComponent<SpriteRenderer>() agrega el componente que dibuja un
-        // Sprite en una escena 2D.
-        SpriteRenderer dibujador = forma.AddComponent<SpriteRenderer>();
-
-        // Asigna el Sprite cuadrado generado por este mismo script.
-        dibujador.sprite = spriteCuadrado;
-
-        // Define el color que se verá en pantalla.
-        dibujador.color = color;
-
-        // sortingOrder decide qué elemento se dibuja delante de otro:
-        // los números más altos aparecen encima de los más bajos.
-        dibujador.sortingOrder = ordenDibujo;
-
-        // Asigna la posición y el tamaño del objeto en el mundo 2D.
+        // position establece la ubicación del objeto en coordenadas del mundo.
         forma.transform.position = posicion;
+
+        // localScale define el ancho, alto y profundidad.
         forma.transform.localScale = escala;
 
-        return dibujador;
+        // AddComponent<SpriteRenderer>() añade el componente que dibuja sprites 2D.
+        SpriteRenderer renderer = forma.AddComponent<SpriteRenderer>();
+
+        // Asigna el sprite cuadrado y el color que recibieron los parámetros.
+        renderer.sprite = spriteCuadrado;
+        renderer.color = color;
+
+        // Define qué SpriteRenderer se dibuja encima de otro.
+        renderer.sortingOrder = ordenDibujo;
+
+        // Devuelve el objeto creado para que el método que lo llamó pueda usarlo.
+        return forma;
     }
 
-
-    // =========================================================================
-    // ObtenerColorCarril(carril)
-    //
-    // Devuelve el color asignado al carril solicitado.
-    // El operador % permite reutilizar los colores si se usan más carriles
-    // que colores definidos.
-    // =========================================================================
-
+    /// <summary>
+    /// Busca el color que corresponde al índice del carril.
+    /// </summary>
     private Color ObtenerColorCarril(int carril)
     {
+        // Un arreglo comienza en el índice 0; cada índice representa un carril.
         return coloresCarril[carril];
     }
-    /*
-    private Color ObtenerColorCarril(int carril)
-    {
-        return coloresCarril[carril % coloresCarril.Length];
-    }
-    */
 
-    // =========================================================================
-    // OnDestroy()
-    //
-    // Elimina la textura y el Sprite creados en memoria al cerrar o descargar
-    // la escena. Destroy() libera esos recursos de Unity.
-    // =========================================================================
+    /// <summary>
+    /// Reduce el brillo de un color para usarlo en el fondo de cada carril.
+    /// </summary>
+    private Color OscurecerColor(Color colorOriginal, float intensidad)
+    {
+        // Multiplica cada componente por intensidad.
+        // Clamp01(valor) limita cada resultado al intervalo de 0 a 1.
+        float rojo = Mathf.Clamp01(colorOriginal.r * intensidad);
+        float verde = Mathf.Clamp01(colorOriginal.g * intensidad);
+        float azul = Mathf.Clamp01(colorOriginal.b * intensidad);
+
+        // Crea y devuelve otro Color con esos componentes y opacidad completa (1).
+        return new Color(rojo, verde, azul, 1f);
+    }
+
+    /// <summary>
+    /// OnDestroy se ejecuta cuando se destruye el componente o se descarga la escena.
+    /// Libera el Sprite y la textura creados por este script.
+    /// </summary>
     private void OnDestroy()
     {
+        // Destroy elimina el recurso Sprite generado durante la ejecución.
         if (spriteCuadrado != null)
         {
             Destroy(spriteCuadrado);
         }
 
-        if (texturaCuadrada != null)
+        // Destroy elimina la textura generada durante la ejecución.
+        if (texturaCuadrado != null)
         {
-            Destroy(texturaCuadrada);
+            Destroy(texturaCuadrado);
         }
     }
 }
