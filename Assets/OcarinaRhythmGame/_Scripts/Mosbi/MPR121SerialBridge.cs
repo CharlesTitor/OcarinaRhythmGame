@@ -286,7 +286,23 @@ public class MPR121SerialBridge : MonoBehaviour
             // Esta marca solo se quitará cuando llegue el mensaje R,carril.
             siguePresionado[carril] = true;
 
-            Debug.Log("Toque recibido en el carril " + carril);
+            //Debug.Log("Toque recibido en el carril " + carril);
+            //int colorID = carril % 4;
+            switch (carril)
+            {
+                case 0:
+                    Debug.Log("Rojo tocado");
+                    break;
+                case 1:
+                    Debug.Log("Verde tocado");
+                    break;
+                case 2:
+                    Debug.Log("Amarillo tocado");
+                    break;
+                case 3:
+                    Debug.Log("Azul tocado");
+                    break;
+            }
             return;
         }
 
