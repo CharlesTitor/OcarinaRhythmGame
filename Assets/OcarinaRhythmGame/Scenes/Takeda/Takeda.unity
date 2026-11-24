@@ -280,7 +280,10 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::JuegoRitmoMPR121
   velocidadNotas: 4
   segundosEntreNotas: 1.2
-  margenExcelente: 0.35
+  ventanaMaximaAcierto: 0.6
+  porcentajePerfecto: 95
+  porcentajeGreat: 85
+  porcentajeGood: 70
 --- !u!1 &1225952617
 GameObject:
   m_ObjectHideFlags: 0
@@ -493,7 +496,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 7789b31008a7f0c43a3d95e3e9257856, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::MPR121SerialBridge
-  nombrePuerto: COM8
+  nombrePuerto: COM6
   velocidad: 115200
   cantidadCarriles: 4
 --- !u!4 &1391992575
@@ -525,7 +528,10 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::JuegoRitmoMPR121
   velocidadNotas: 4
   segundosEntreNotas: 1.2
-  margenExcelente: 0.35
+  ventanaMaximaAcierto: 0.6
+  porcentajePerfecto: 95
+  porcentajeGreat: 85
+  porcentajeGood: 70
 --- !u!1 &1799962032
 GameObject:
   m_ObjectHideFlags: 0
