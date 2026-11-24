@@ -65,7 +65,7 @@ public class SensorDetector : MonoBehaviour
             puerto.Open();
             Conectado = true;
             leyendo = true;
-            hiloLectura = new Thread(LeerPuertoSegundoPlano());
+            //hiloLectura = new Thread(LeerPuertoSegundoPlano());
             hiloLectura.IsBackground = true;
             hiloLectura.Start();
             Debug.Log("Puerto abierto " + nombrePuerto + " a " + velocidad + " baudios.");
